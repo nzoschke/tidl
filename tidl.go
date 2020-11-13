@@ -13,9 +13,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"time"
 	"strconv"
 	"strings"
+	"time"
 
 	// TODO(ts): look at replacing bitio
 
@@ -28,6 +28,7 @@ import (
 
 	// "github.com/davecgh/go-spew/spew"
 	"context"
+
 	"golang.org/x/time/rate"
 )
 
@@ -51,7 +52,7 @@ func (ct *cTime) UnmarshalJSON(b []byte) error {
 	if string(b) == "null" {
 		return nil
 	}
-	
+
 	t, err := time.Parse("2006-01-02T15:04:05-0700", strings.Replace(string(b), `"`, "", -1))
 	*ct = cTime(t)
 	return err
@@ -98,6 +99,7 @@ type Album struct {
 	Popularity           float64     `json:"popularity,omitempty"`
 	Artist               Artist      `json:"artist"`
 	Cover                string      `json:"cover"`
+	UPC                  string      `json:"upc"`
 	artBody              []byte
 }
 
@@ -108,19 +110,19 @@ type Playlist struct {
 
 	ID string
 
-	Description string
-	Created cTime
-	URL string
-	SquareImage string
+	Description     string
+	Created         cTime
+	URL             string
+	SquareImage     string
 	LastItemAddedAt cTime
-	Image string
-	Popularity float64
-	LastUpdated cTime
-	NumberOfTracks int
-	Duration int
-	Type string
-	PublicPlaylist bool
-	Title string
+	Image           string
+	Popularity      float64
+	LastUpdated     cTime
+	NumberOfTracks  int
+	Duration        int
+	Type            string
+	PublicPlaylist  bool
+	Title           string
 
 	Tracks []Track `json:"-"`
 
@@ -143,13 +145,15 @@ type Track struct {
 	Artists      []Artist    `json:"artists"`
 	Artist       Artist      `json:"artist"`
 	Album        Album       `json:"album"`
-	Playlist 	 Playlist	 `json:"-"`
+	Playlist     Playlist    `json:"-"`
 	Title        string      `json:"title"`
 	ID           json.Number `json:"id"`
+	ISRC         string      `json:"isrc"`
 	Explicit     bool        `json:"explicit"`
 	Copyright    string      `json:"copyright"`
 	Popularity   int         `json:"popularity"`
 	TrackNumber  json.Number `json:"trackNumber"`
+	VolumeNumber json.Number `json:"volumeNumber"`
 	Duration     json.Number `json:"duration"`
 	AudioQuality string      `json:"audioQuality"`
 }
@@ -186,6 +190,10 @@ func (t *Tidal) get(dest string, query *url.Values, s interface{}) error {
 	// if res.StatusCode := 200 {
 	// 	fmt.Println(res.StatusCode)
 	// }
+
+	if res.StatusCode == 404 {
+		return fmt.Errorf("unavailable")
+	}
 
 	defer res.Body.Close()
 	return json.NewDecoder(res.Body).Decode(&s)
@@ -256,6 +264,15 @@ func (t *Tidal) GetFavoriteAlbums() ([]string, error) {
 	return ids, err
 }
 
+// GetTrack func
+func (t *Tidal) GetTrack(id string) (Track, error) {
+	var s Track
+
+	err := t.get("tracks/"+id, &url.Values{}, &s)
+
+	return s, err
+}
+
 // GetStreamURL func
 func (t *Tidal) GetStreamURL(id, q string) (string, error) {
 	var s struct {
@@ -295,7 +312,20 @@ func (t *Tidal) GetAlbumTracks(id string) ([]Track, error) {
 	return s.Items, t.get("albums/"+id+"/tracks", &url.Values{}, &s)
 }
 
-// GetPlaylist func 
+// GetPlaylist func
+func (t *Tidal) GetPlaylists() ([]Playlist, error) {
+	var s struct {
+		Items []Playlist
+	}
+
+	err := t.get(fmt.Sprintf("users/%s/playlists", t.UserID), &url.Values{
+		"limit": {"500"},
+	}, &s)
+
+	return s.Items, err
+}
+
+// GetPlaylist func
 func (t *Tidal) GetPlaylist(id string) (Playlist, error) {
 	var s Playlist
 
@@ -313,7 +343,7 @@ func (t *Tidal) GetPlaylistTracks(id string) ([]Track, error) {
 	values := &url.Values{}
 	values.Add("limit", "500")
 
-	return s.Items, t.get("playlists/"+id+"/tracks", values, &s) 
+	return s.Items, t.get("playlists/"+id+"/tracks", values, &s)
 }
 
 // SearchTracks func
@@ -529,7 +559,7 @@ func (t *Tidal) DownloadPlaylist(p Playlist) error {
 		// TODO(ts): improve ID3
 
 		tr.Playlist = p
-		tr.TrackNumber = json.Number(strconv.Itoa(i+1))
+		tr.TrackNumber = json.Number(strconv.Itoa(i + 1))
 
 		if tr.DoExists(root) {
 			continue
@@ -568,7 +598,7 @@ func (t Tidal) DownloadTrack(root string, tr Track) error {
 	os.MkdirAll(root, os.ModePerm)
 
 	path := tr.GetPath(root)
-	
+
 	u, err := t.GetStreamURL(tr.ID.String(), "LOSSLESS")
 	if err != nil {
 		panic(err)
@@ -590,7 +620,7 @@ func (t Tidal) DownloadTrack(root string, tr Track) error {
 
 	buf, _ := ioutil.ReadAll(res.Body)
 	res.Body.Close()
-	
+
 	f.Write(buf)
 	f.Close()
 
@@ -616,17 +646,17 @@ func uuid() string {
 // New func
 func New(user, pass string) (*Tidal, error) {
 	query := url.Values{
-		"username":        {user},
-		"password":        {pass},
+		"username": {user},
+		"password": {pass},
 	}
 
-	req, err := http.NewRequest("POST", baseurl + "login/username", strings.NewReader(query.Encode()))
-	
+	req, err := http.NewRequest("POST", baseurl+"login/username", strings.NewReader(query.Encode()))
+
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Add("X-Tidal-Token", "wc8j_yBJd20zOmx0")
 
 	client := &http.Client{}
-	
+
 	res, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -695,7 +725,7 @@ func encFlac(src string, tr Track) error {
 
 	comments = append(comments, [2]string{"ARTIST", tr.Artist.Name})
 	comments = append(comments, [2]string{"ALBUMARTIST", tr.Album.Artist.Name})
-	
+
 	comments = append(comments, [2]string{"COPYRIGHT", tr.Copyright})
 	comments = append(comments, [2]string{"METADATA_BLOCK_PICTURE", encodedPictureData})
 	comments = append(comments, [2]string{"COMMENTS", extraComments})
@@ -736,7 +766,7 @@ func encFlac(src string, tr Track) error {
 
 func encMp4(src string, tr Track) error {
 	path := src + "/" + clean(tr.Artist.Name) + " - " + clean(tr.Title)
-	return os.Rename(path, path + ".mp4")
+	return os.Rename(path, path+".mp4")
 
 	return nil
 }
