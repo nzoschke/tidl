@@ -156,6 +156,7 @@ type Track struct {
 	VolumeNumber json.Number `json:"volumeNumber"`
 	Duration     json.Number `json:"duration"`
 	AudioQuality string      `json:"audioQuality"`
+	Version      string      `json:"version"`
 }
 
 // Search struct
@@ -196,6 +197,7 @@ func (t *Tidal) get(dest string, query *url.Values, s interface{}) error {
 	}
 
 	defer res.Body.Close()
+
 	return json.NewDecoder(res.Body).Decode(&s)
 }
 
@@ -508,7 +510,7 @@ func (t *Tidal) DownloadAlbum(al Album) error {
 
 	for i, track := range tracks {
 		fmt.Printf("\t [%v/%v] %v\n", i+1, len(tracks), track.Title)
-		if err := t.DownloadTrack(dirs, track); err != nil {
+		if _, err := t.DownloadTrack(dirs, track); err != nil {
 			return err
 		}
 	}
@@ -586,9 +588,9 @@ func (tr Track) DoExists(root string) bool {
 	return (len(matches) > 0)
 }
 
-func (t Tidal) DownloadTrack(root string, tr Track) error {
+func (t Tidal) DownloadTrack(root string, tr Track) (string, error) {
 	if tr.DoExists(root) {
-		return nil
+		return tr.GetPath(root), nil
 	}
 
 	// TODO(ts): improve ID3
@@ -605,7 +607,7 @@ func (t Tidal) DownloadTrack(root string, tr Track) error {
 	}
 
 	if u == "" {
-		return nil
+		return "", fmt.Errorf("no stream url")
 	}
 
 	f, err := os.Create(path)
@@ -625,13 +627,13 @@ func (t Tidal) DownloadTrack(root string, tr Track) error {
 	f.Close()
 
 	kind, _ := filetype.Match(buf)
-	err = enc(root, tr, kind)
+	out, err := enc(root, tr, kind)
 	if err != nil {
 		panic(err)
 	}
 	os.Remove(path)
 
-	return nil
+	return out, nil
 }
 
 // helper function to generate a uuid
@@ -677,14 +679,14 @@ func clean(s string) string {
 	return strings.Replace(s, "/", "\u2215", -1)
 }
 
-func encFlac(src string, tr Track) error {
+func encFlac(src string, tr Track) (string, error) {
 	// https://wiki.hydrogenaud.io/index.php?title=Tag_Mapping#Titles
 	// Decode FLAC file.
 	path := src + "/" + clean(tr.Artist.Name) + " - " + clean(tr.Title)
 	stream, err := flac.ParseFile(path)
 	if err != nil {
 		// isn't a FLAC file
-		return err
+		return "", err
 	}
 
 	// https://xiph.org/flac/format.html#metadata_block_picture
@@ -755,23 +757,21 @@ func encFlac(src string, tr Track) error {
 	// Encode FLAC file.
 	f, err := os.Create(path + ".flac")
 	if err != nil {
-		return err
+		return "", err
 	}
 	err = flac.Encode(f, stream)
 	f.Close()
 	stream.Close()
 
-	return nil
+	return path + ".flac", nil
 }
 
-func encMp4(src string, tr Track) error {
+func encMp4(src string, tr Track) (string, error) {
 	path := src + "/" + clean(tr.Artist.Name) + " - " + clean(tr.Title)
-	return os.Rename(path, path+".mp4")
-
-	return nil
+	return path + ".mp4", os.Rename(path, path+".mp4")
 }
 
-func enc(src string, tr Track, kind types.Type) error {
+func enc(src string, tr Track, kind types.Type) (string, error) {
 	switch kind.MIME.Value {
 	case "audio/x-flac":
 		return encFlac(src, tr)
@@ -779,6 +779,6 @@ func enc(src string, tr Track, kind types.Type) error {
 		return encMp4(src, tr)
 	default:
 		fmt.Println(kind.MIME.Value)
-		return nil
+		return "", nil
 	}
 }
